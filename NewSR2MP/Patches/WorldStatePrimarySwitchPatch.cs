@@ -1,0 +1,23 @@
+﻿using HarmonyLib;
+using Il2CppXGamingRuntime.Interop;
+using NewSR2MP.Component;
+using NewSR2MP.Packet;
+
+namespace NewSR2MP.Patches
+{
+    [HarmonyPatch(typeof(WorldStatePrimarySwitch), nameof(WorldStatePrimarySwitch.SetStateForAll))]
+    internal class WorldStatePrimarySwitchSetStateForAll
+    {
+        public static void Postfix(WorldStatePrimarySwitch __instance, SwitchHandler.State state, bool immediate)
+        {
+            if (handlingPacket)
+                return;
+            
+            MultiplayerManager.NetworkSend(new SwitchModifyPacket
+            {
+                id = __instance.SwitchDefinition.ID,
+                state = (byte)state,
+            });
+        }
+    }
+}

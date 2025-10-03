@@ -1,0 +1,19 @@
+using Il2CppMonomiPark.SlimeRancher.DataModel;
+
+namespace NewSR2MP.Patches;
+
+[HarmonyPatch(typeof(GadgetsModel), nameof(GadgetsModel.SetCount))]
+public class GadgetsModelSetCount
+{
+    static void Postfix(GadgetsModel __instance, IdentifiableType type, int newCount)
+    {
+        if (handlingPacket)
+            return;
+        
+        MultiplayerManager.NetworkSend(new RefineryItemPacket
+        {
+            count = (ushort)newCount,
+            id = (ushort)GetIdentID(type),
+        });
+    }
+}
