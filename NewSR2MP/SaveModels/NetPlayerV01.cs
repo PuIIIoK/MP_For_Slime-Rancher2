@@ -32,6 +32,9 @@ namespace NewSR2MP.SaveModels
         // Track if player has completed initial tutorials
         public bool tutorialsCompleted = false;
         
+        // Track if player has seen the intro sequence
+        public bool hasSeenIntro = false;
+        
         // Waypoint data
         public bool hasWaypoint = false;
         public ModdedVector3V01 waypointPosition = new ModdedVector3V01(0, 0, 0);
@@ -47,6 +50,7 @@ namespace NewSR2MP.SaveModels
             WriteList(ammo);
             
             Write(tutorialsCompleted);
+            Write(hasSeenIntro);
             
             // Save waypoint data
             Write(hasWaypoint);
@@ -70,6 +74,12 @@ namespace NewSR2MP.SaveModels
                 {
                     tutorialsCompleted = Read<bool>();
                     
+                    // Try to read intro state if available
+                    if (Reader.BaseStream.Position < Reader.BaseStream.Length)
+                    {
+                        hasSeenIntro = Read<bool>();
+                    }
+                    
                     // Try to read waypoint data if available
                     if (Reader.BaseStream.Position < Reader.BaseStream.Length)
                     {
@@ -82,6 +92,7 @@ namespace NewSR2MP.SaveModels
             catch
             {
                 tutorialsCompleted = false;
+                hasSeenIntro = false;
                 hasWaypoint = false;
             }
         }

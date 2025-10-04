@@ -457,6 +457,7 @@ namespace NewSR2MP
                     rot = playerData.rotation.value,
                     ammo = playerAmmoData,
                     sceneGroup = playerData.sceneGroup,
+                    hasSeenIntro = playerData.hasSeenIntro,
                     hasWaypoint = playerData.hasWaypoint,
                     waypointPosition = playerData.waypointPosition.value,
                     waypointMap = playerData.waypointMap
@@ -500,6 +501,11 @@ namespace NewSR2MP
                 {
                     pods.Add(int.Parse(pod.key.Replace("pod","")), pod.value.state);
                 }
+
+                // Progress tracking - пока недоступен через API
+                List<string> progressUnlocks = new List<string>();
+                List<string> completedTutorials = new List<string>();
+                bool hasCompletedFTE = false;
                 
                 // Send save data.
                 var saveMessage = new LoadPacket()
@@ -512,6 +518,9 @@ namespace NewSR2MP
                     initAccess = access, initPods = pods, initSwitches = switches, money = money, time = time,
                     initMaps = fogEvents, playerID = conn, localPlayerSave = localPlayerData, upgrades = upgrades,
                     marketPrices = prices, refineryItems = refineryItems,
+                    initProgress = progressUnlocks,
+                    initTutorials = completedTutorials,
+                    hasCompletedFirstTimeExperience = hasCompletedFTE,
                 };
 
                 NetworkSend(saveMessage, ServerSendOptions.SendToPlayer(conn));
@@ -539,98 +548,40 @@ namespace NewSR2MP
                 SRMP.Error(ex.ToString());
             }
 
-            try
+            // ===== УПРОЩЕННАЯ СИСТЕМА БЕЗ ВИРТУАЛЬНОГО AmmoSlotManager =====
+            // Инвентарь клиента хранится ТОЛЬКО как List<NetworkAmmoDataV01> в playerData.ammo
+            // НЕ создаем виртуальный AmmoSlotManager - это избыточно и вызывает проблемы
+            // Вместо этого работаем напрямую с данными:
+            // 1. При подключении - отправляем playerData.ammo клиенту в LoadPacket
+            // 2. При отключении - получаем ClientInventorySyncPacket и обновляем playerData.ammo
+            // 3. При сохранении - сохраняем playerData.ammo в файл
+            
+            SRMP.Log($"========== CLIENT INVENTORY SETUP ==========");
+            
+            // Подготавливаем данные инвентаря
+            if (playerData.ammo.Count < 7)
             {
-                SRMP.Log($"========== VIRTUAL INVENTORY SETUP ==========");
-                
-                // ===== СИСТЕМА ИЗОЛЯЦИИ ИНВЕНТАРЕЙ =====
-                // Создаем ВИРТУАЛЬНЫЙ инвентарь для клиента на хосте
-                // Этот инвентарь ПОЛНОСТЬЮ НЕЗАВИСИМ от инвентаря хоста
-                // Он хранится ТОЛЬКО на хосте и используется для:
-                // 1. Сохранения инвентаря клиента между сеансами
-                // 2. Отправки инвентаря клиенту при подключении
-                // 
-                // ВАЖНО: Клиент использует свой ЛОКАЛЬНЫЙ инвентарь (sceneContext.PlayerState.Ammo)
-                // который НЕ регистрируется в ammoByPlotID и НЕ синхронизируется через пакеты
-                
-                string playerPointer = $"player_{savingID}";
-                
-                // Проверяем не существует ли уже виртуальный инвентарь (защита от дубликатов)
-                if (ammoByPlotID.ContainsKey(playerPointer))
+                // Новый игрок - создаем пустой инвентарь
+                playerData.ammo = new List<NetworkAmmoDataV01>();
+                for (var i = 0; i < 7; i++)
                 {
-                    SRMP.Log($"⚠ Virtual inventory for {username} already exists! Removing old one...");
-                    ammoByPlotID.Remove(playerPointer);
-                }
-                
-                var newAmmo = CreateNewPlayerAmmo();
-                
-                // НЕ используем SetModel от хоста - избегаем фантомных слотов!
-                // Регистрируем виртуальный инвентарь клиента на хосте
-                newAmmo.RegisterAmmoPointer(playerPointer);
-                
-                SRMP.Debug($"  Registered virtual inventory: {playerPointer}");
-                SRMP.Debug($"  Pointer address: {newAmmo.Pointer.ToString("X")}");
-
-                var savedAmmo = playerData.ammo;
-                if (savedAmmo.Count < 7)
-                {
-                    // Новый игрок - создаем пустой инвентарь
-                    savedAmmo = new List<NetworkAmmoDataV01>();
-                    for (var i = 0; i < 7; i++)
+                    playerData.ammo.Add(new NetworkAmmoDataV01()
                     {
-                        savedAmmo.Add(new NetworkAmmoDataV01()
-                        {
-                            count = 0,
-                            ident = 9,
-                        });
-                    }
-                    SRMP.Debug($"  Created empty inventory structure (7 slots)");
+                        count = 0,
+                        ident = 9,
+                        emotionX = 0,
+                        emotionY = 0,
+                        emotionZ = 0,
+                        emotionW = 0,
+                    });
                 }
-
-                // Инициализируем виртуальный инвентарь данными из сохранения
-                var savedSlots = AmmoDataToSlotsSRMP(savedAmmo);
-                
-                int slotC = 0;
-                int nonEmptySlots = 0;
-                foreach (var slot in newAmmo.Slots)
-                {
-                    if (slotC < savedSlots.Length && savedSlots[slotC] != null)
-                    {
-                        // Копируем данные из сохраненного слота
-                        slot._id = savedSlots[slotC]._id;
-                        slot._count = savedSlots[slotC]._count;
-                        slot.Emotions = savedSlots[slotC].Emotions;
-                        slot.Appearance = savedSlots[slotC].Appearance;
-                        
-                        if (slot._count > 0)
-                        {
-                            nonEmptySlots++;
-                            SRMP.Debug($"    Slot {slotC}: {slot._id?.name ?? "null"} x{slot._count}");
-                        }
-                    }
-                    else
-                    {
-                        // Создаем пустой слот
-                        slot._id = null;
-                        slot._count = 0;
-                        slot.Emotions = default;
-                        slot.Appearance = SlimeAppearance.AppearanceSaveSet.NONE;
-                    }
-                    
-                    // Копируем свойства definition (независимо от хоста)
-                    slot.Definition = newAmmo._ammoSlotDefinitions[slotC];
-                    slot._maxCountValue = sceneContext.PlayerState.Ammo.Slots[slotC]._maxCountValue;
-                    slot._isUnlockedValue = sceneContext.PlayerState.Ammo.Slots[slotC]._isUnlockedValue;
-                    slotC++;
-                }
-                
-                SRMP.Log($"✓ Virtual inventory ready: {nonEmptySlots}/{newAmmo.Slots.Count} slots filled");
-                SRMP.Log($"=============================================");
+                SRMP.Debug($"  Created empty inventory (7 slots)");
             }
-            catch (Exception ex)
-            {
-                SRMP.Error($"Failed to create client inventory!\n{ex}");
-            }
+            
+            int itemCount = playerData.ammo.Count(x => x.count > 0);
+            SRMP.Log($"✓ Inventory ready: {itemCount} items in {playerData.ammo.Count} slots");
+            SRMP.Log($"  Inventory will be sent to client in LoadPacket");
+            SRMP.Log($"============================================");
 
         }
 
@@ -648,10 +599,33 @@ namespace NewSR2MP
             // Отправляем инвентарь хосту перед выходом
             if (ClientActive() && !ServerActive())
             {
-                SendClientInventoryToHost();
+                MelonCoroutines.Start(ClientLeaveCoroutine());
             }
+            else
+            {
+                systemContext.SceneLoader.LoadSceneGroup(systemContext.SceneLoader._mainMenuSceneGroup);
+            }
+        }
+        
+        /// <summary>
+        /// Корутина для плавного выхода клиента с сохранением инвентаря
+        /// </summary>
+        private static IEnumerator ClientLeaveCoroutine()
+        {
+            SRMP.Log("========== CLIENT LEAVING ==========");
             
+            // 1. Отправляем финальный инвентарь хосту
+            SendClientInventoryToHost();
+            
+            // 2. Короткая задержка для отправки пакета
+            yield return null;
+            
+            SRMP.Log("✓ Final inventory sent, disconnecting...");
+            
+            // 3. Выходим в главное меню
             systemContext.SceneLoader.LoadSceneGroup(systemContext.SceneLoader._mainMenuSceneGroup);
+            
+            SRMP.Log("====================================");
         }
         
         /// <summary>
@@ -663,9 +637,11 @@ namespace NewSR2MP
             {
                 if (sceneContext == null || sceneContext.PlayerState == null || sceneContext.PlayerState.Ammo == null)
                 {
-                    SRMP.Debug("Cannot send inventory - scene context not available");
+                    SRMP.Log("⚠ Cannot send inventory - scene context not available");
                     return;
                 }
+                
+                SRMP.Log($"========== SENDING CLIENT INVENTORY ==========");
                 
                 var clientAmmo = sceneContext.PlayerState.Ammo;
                 var inventoryData = new List<AmmoData>();
@@ -684,7 +660,15 @@ namespace NewSR2MP
                     });
                     
                     if (slot._count > 0)
+                    {
                         itemCount++;
+                        string itemName = (slot._id != null) ? slot._id.name : "empty";
+                        SRMP.Log($"  Slot {i}: {itemName} (ID: {identId}) x{slot._count}");
+                    }
+                    else
+                    {
+                        SRMP.Debug($"  Slot {i}: empty (ID: {identId})");
+                    }
                 }
                 
                 var packet = new ClientInventorySyncPacket
@@ -694,7 +678,8 @@ namespace NewSR2MP
                 
                 NetworkSend(packet);
                 
-                SRMP.Log($"→ Sent inventory to host: {itemCount} items in {inventoryData.Count} slots");
+                SRMP.Log($"✓ Sent inventory to host: {itemCount} items in {inventoryData.Count} slots");
+                SRMP.Log($"==============================================");
             }
             catch (Exception ex)
             {
@@ -843,7 +828,13 @@ namespace NewSR2MP
             {
                 if (ClientActive())
                 {
-                    // Полное отключение туториалов и титров для клиента (каждый раз)
+                    SRMP.Log("========== DISABLING INTRO FOR CLIENT ==========");
+                    SRMP.Log("Reason: Loading host's world with existing progress");
+                    
+                    // ВАЖНО: Клиент ВСЕГДА пропускает интро/туториалы
+                    // Он загружает мир хоста, где это уже пройдено
+                    
+                    // Полное отключение туториалов и титров для клиента
                     if (sceneContext?.TutorialDirector != null)
                     {
                         // Отменяем текущий туториал если он есть
@@ -859,8 +850,54 @@ namespace NewSR2MP
                         var suppressRequester = new Il2CppSystem.Object();
                         sceneContext.TutorialDirector.SuppressTutorials(suppressRequester);
                         
-                        SRMP.Log("✓ Disabled tutorials and intro for client");
+                        SRMP.Log("✓ Tutorials disabled");
                     }
+                    
+                    // ВСЕГДА пропускаем интро для клиента
+                    try
+                    {
+                        // Ищем и закрываем IntroSequenceUIRoot (новое интро)
+                        var introSequence = UnityEngine.Object.FindObjectOfType<Il2CppMonomiPark.SlimeRancher.UI.IntroSequence.IntroSequenceUIRoot>();
+                        if (introSequence != null && introSequence.gameObject.activeSelf)
+                        {
+                            introSequence.gameObject.SetActive(false);
+                            SRMP.Log("✓ Skipped IntroSequenceUIRoot");
+                        }
+                        
+                        // Ищем и закрываем IntroUI (старое интро)
+                        var introUI = UnityEngine.Object.FindObjectOfType<Il2CppMonomiPark.SlimeRancher.UI.IntroUI>();
+                        if (introUI != null && introUI.gameObject.activeSelf)
+                        {
+                            introUI.gameObject.SetActive(false);
+                            SRMP.Log("✓ Skipped IntroUI");
+                        }
+                        
+                        // Отключаем первое вступление (first time experience)
+                        if (sceneContext?.GameModel != null)
+                        {
+                            // Проверяем есть ли флаг hasCompletedFirstTimeExperience в LoadPacket
+                            bool hostCompletedFTE = latestSaveJoined?.hasCompletedFirstTimeExperience ?? true;
+                            
+                            if (hostCompletedFTE)
+                            {
+                                SRMP.Log("✓ Host has completed first time experience - skipping for client");
+                            }
+                        }
+                        
+                        SRMP.Log("✓ All intro sequences disabled");
+                    }
+                    catch (Exception introEx)
+                    {
+                        SRMP.Debug($"Intro skip (non-critical): {introEx.Message}");
+                    }
+                    
+                    // Помечаем что клиент видел интро (для будущих подключений)
+                    if (latestSaveJoined?.localPlayerSave != null)
+                    {
+                        latestSaveJoined.localPlayerSave.hasSeenIntro = true;
+                    }
+                    
+                    SRMP.Log("===============================================");
                     
                     // Убираем возможный черный экран и замораживание
                     try

@@ -29,6 +29,11 @@ namespace NewSR2MP.Packet
         public List<float> marketPrices = new();
         public Dictionary<int, int> refineryItems = new();
 
+        // Progress tracking
+        public List<string> initProgress = new(); // ProgressDirector unlocks
+        public List<string> initTutorials = new(); // Completed tutorials
+        public bool hasCompletedFirstTimeExperience = false;
+
         public PacketType Type => PacketType.JoinSave;
         public PacketReliability Reliability => PacketReliability.ReliableUnordered;
 
@@ -184,6 +189,17 @@ namespace NewSR2MP.Packet
                 msg.Write(pod.Key);
                 msg.Write((byte)pod.Value);
             }
+
+            // Progress tracking
+            msg.Write(initProgress.Count);
+            foreach (var progress in initProgress)
+                msg.Write(progress);
+
+            msg.Write(initTutorials.Count);
+            foreach (var tutorial in initTutorials)
+                msg.Write(tutorial);
+
+            msg.Write(hasCompletedFirstTimeExperience);
         }
 
         public void Deserialize(IncomingMessage msg)
@@ -423,6 +439,19 @@ namespace NewSR2MP.Packet
             var podCount = msg.ReadInt32();
             for (int i = 0; i < podCount; i++)
                 initPods.Add(msg.ReadInt32(), (TreasurePod.State)msg.ReadByte());
+
+            // Progress tracking
+            int progressCount = msg.ReadInt32();
+            initProgress = new List<string>();
+            for (int i = 0; i < progressCount; i++)
+                initProgress.Add(msg.ReadString());
+
+            int tutorialCount = msg.ReadInt32();
+            initTutorials = new List<string>();
+            for (int i = 0; i < tutorialCount; i++)
+                initTutorials.Add(msg.ReadString());
+
+            hasCompletedFirstTimeExperience = msg.ReadBoolean();
         }
     }
 
@@ -543,6 +572,9 @@ namespace NewSR2MP.Packet
         public int sceneGroup;
         
         public List<AmmoData> ammo;
+        
+        // Intro state
+        public bool hasSeenIntro;
         
         // Waypoint data
         public bool hasWaypoint;

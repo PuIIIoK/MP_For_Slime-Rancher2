@@ -78,8 +78,17 @@ public partial class NetworkHandler
             if (!TryGetPlayer((ushort)packet.id, out var state))
                 return;
             var playerObj = state.worldObject;
-            playerObj.GetComponent<TransformSmoother>().nextPos = packet.pos;
-            playerObj.GetComponent<TransformSmoother>().nextRot = packet.rot.eulerAngles;
+            
+            // Вычисляем приблизительную скорость игрока из его направления и скорости движения
+            // Игроки двигаются по земле, поэтому Y = 0
+            Vector3 forward = packet.rot * Vector3.forward;
+            Vector3 right = packet.rot * Vector3.right;
+            forward.y = 0;
+            right.y = 0;
+            
+            Vector3 estimatedVelocity = forward * packet.forwardSpeed + right * packet.horizontalSpeed;
+            
+            playerObj.GetComponent<TransformSmoother>().SetNetworkTarget(packet.pos, packet.rot.eulerAngles, estimatedVelocity);
 
 
             var anim = playerObj.GetComponent<Animator>();

@@ -1,3 +1,4 @@
+using System.IO;
 using Il2CppMonomiPark.SlimeRancher.DataModel;
 using Il2CppMonomiPark.SlimeRancher.Economy;
 using Il2CppMonomiPark.SlimeRancher.Event;
@@ -248,50 +249,7 @@ public partial class NetworkHandler
                 return;
             }
             
-            // Находим виртуальный инвентарь клиента
-            string playerPointer = $"player_{clientGuid}";
-            
-            if (ammoByPlotID.TryGetValue(playerPointer, out var clientAmmo))
-            {
-                // Обновляем виртуальный инвентарь актуальными данными от клиента
-                try
-                {
-                    int updatedSlots = 0;
-                    foreach (var slotData in packet.inventory)
-                    {
-                        if (slotData.slot >= 0 && slotData.slot < clientAmmo.Slots.Count)
-                        {
-                            var slot = clientAmmo.Slots[slotData.slot];
-                            
-                            if (slotData.id == -1 || slotData.id == 9) // Пустой слот
-                            {
-                                slot._id = null;
-                                slot._count = 0;
-                            }
-                            else if (identifiableTypes.ContainsKey(slotData.id))
-                            {
-                                slot._id = identifiableTypes[slotData.id];
-                                slot._count = slotData.count;
-                                updatedSlots++;
-                                
-                                SRMP.Debug($"  Updated slot {slotData.slot}: {slot._id?.name ?? "null"} x{slot._count}");
-                            }
-                        }
-                    }
-                    
-                    SRMP.Log($"✓ Updated virtual inventory: {updatedSlots} slots with items");
-                }
-                catch (Exception ex)
-                {
-                    SRMP.Error($"Failed to update virtual inventory: {ex.Message}");
-                }
-            }
-            else
-            {
-                SRMP.Debug($"Virtual inventory not found - saving directly to playerData");
-            }
-            
-            // Сохраняем инвентарь в playerData
+            // Обновляем playerData.ammo напрямую (виртуального AmmoSlotManager больше нет)
             var networkAmmoData = new List<NetworkAmmoDataV01>();
             int itemCount = 0;
             
@@ -308,12 +266,48 @@ public partial class NetworkHandler
                 });
                 
                 if (slotData.count > 0)
+                {
                     itemCount++;
+                    // Логируем что именно сохраняем
+                    string itemName = "unknown";
+                    if (identifiableTypes.ContainsKey(slotData.id))
+                    {
+                        itemName = identifiableTypes[slotData.id]?.name ?? "null";
+                    }
+                    SRMP.Debug($"  Slot {slotData.slot}: {itemName} (ID: {slotData.id}) x{slotData.count}");
+                }
             }
             
             playerData.ammo = networkAmmoData;
             
-            SRMP.Log($"✓ Saved client inventory: {itemCount} items in {networkAmmoData.Count} slots");
+            SRMP.Log($"✓ Updated playerData.ammo: {itemCount} items in {networkAmmoData.Count} slots");
+            
+            // ВАЖНО: Сохраняем изменения напрямую в файл
+            // НЕ используем DoNetworkSave() т.к. клиент уже отключен и не в списке players!
+            if (!string.IsNullOrEmpty(savedGamePath))
+            {
+                try
+                {
+                    FileStream fs = File.Open(savedGamePath, FileMode.Create);
+                    BinaryWriter bw = new BinaryWriter(fs);
+                    
+                    savedGame.WriteData(bw);
+                    
+                    bw.Dispose();
+                    fs.Dispose();
+                    
+                    SRMP.Log($"✓ Inventory saved to file: {savedGamePath}");
+                }
+                catch (Exception saveEx)
+                {
+                    SRMP.Error($"Failed to save inventory to file: {saveEx.Message}");
+                }
+            }
+            else
+            {
+                SRMP.Log($"⚠ Cannot save inventory - savedGamePath is empty");
+            }
+            
             SRMP.Log($"===========================================");
         }
         catch (Exception ex)

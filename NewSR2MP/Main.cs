@@ -291,20 +291,33 @@ public class Main : SR2EExpansionV1
 
             LoadPacket save = latestSaveJoined;
 
-            // Клиент всегда спавнится на дефолтной точке спавна (начальная позиция ранча)
-            Vector3 defaultSpawnPosition = new Vector3(541.6466f, 18.646f, 349.3299f);
-            Vector3 defaultSpawnRotation = Vector3.up * 236.8107f;
+            // Клиент спавнится на позиции из сохранения хоста
+            Vector3 spawnPosition = save.localPlayerSave.pos;
+            Vector3 spawnRotation = save.localPlayerSave.rot;
             
-            sceneContext.player.GetComponent<SRCharacterController>().Position = defaultSpawnPosition;
-            sceneContext.player.GetComponent<SRCharacterController>().Rotation = Quaternion.Euler(defaultSpawnRotation);
+            sceneContext.player.GetComponent<SRCharacterController>().Position = spawnPosition;
+            sceneContext.player.GetComponent<SRCharacterController>().Rotation = Quaternion.Euler(spawnRotation);
             
-            SRMP.Log($"Client spawned at default position: {defaultSpawnPosition}");
+            SRMP.Log($"✓ Client spawned at saved position: {spawnPosition} (from host's save)");
 
+            // Загружаем время из мира хоста
             sceneContext.TimeDirector._worldModel.worldTime = save.time;
             sceneContext.TimeDirector._timeFactor = 0;
+            SRMP.Log($"✓ World time loaded: {save.time:F2} (from host's save)");
 
             actors.Clear();
             sceneContext.GameModel.identifiables.Clear();
+            
+            SRMP.Log($"========== LOADING WORLD PROGRESS FROM HOST ==========");
+            SRMP.Log($"📦 Actors: {save.initActors.Count}");
+            SRMP.Log($"🏠 Plots: {save.initPlots.Count}");
+            SRMP.Log($"🎯 Gordos: {save.initGordos.Count}");
+            SRMP.Log($"🚪 Access Doors: {save.initAccess.Count}");
+            SRMP.Log($"📚 Pedias: {save.initPedias.Count}");
+            SRMP.Log($"🗺️ Map unlocks: {save.initMaps.Count}");
+            SRMP.Log($"💰 Money: {save.money}");
+            SRMP.Log($"🔧 Upgrades: {save.upgrades.Count}");
+            SRMP.Log($"=====================================================");
 
             foreach (var actor in sceneContext.GameModel.identifiables)
             {
@@ -349,7 +362,8 @@ public class Main : SR2EExpansionV1
                         obj2.AddComponent<NetworkActorOwnerToggle>();
 
                         obj2.transform.position = newActor.pos;
-                        obj2.GetComponent<TransformSmoother>().nextPos = newActor.pos;
+                        // При загрузке из сохранения объект не движется, поэтому скорость = 0
+                        obj2.GetComponent<TransformSmoother>().SetNetworkTarget(newActor.pos, newActor.rot, Vector3.zero);
                         obj2.GetComponent<NetworkActor>().IsOwned = false;
 
                         if (!actors.TryAdd(newActor.id, obj2.GetComponent<NetworkActor>()))
@@ -478,10 +492,22 @@ public class Main : SR2EExpansionV1
                 yield return null;
             }
 
+            // Progress tracking - пока недоступен через API
+            // Эти данные будут использованы в будущих обновлениях
+
+            yield return null;
+
 
 
             var np = sceneContext.player.AddComponent<NetworkPlayer>();
             np.id = save.playerID;
+
+            // Добавляем компонент для автосохранения инвентаря клиента
+            if (ClientActive() && !ServerActive())
+            {
+                sceneContext.player.AddComponent<ClientInventorySync>();
+                SRMP.Log("✓ Client inventory auto-sync enabled");
+            }
 
             bool completedAccessDoors = false;
 
@@ -653,24 +679,46 @@ public class Main : SR2EExpansionV1
 
             try
             {
-                int i = 0;
-                int itemsRestored = 0;
+                SRMP.Log($"========== CLIENT LOADING DATA FROM HOST ==========");
+                SRMP.Log($"📁 Source: HOST's save file (not local)");
+                SRMP.Log($"← Loading inventory: {save.localPlayerSave.ammo.Count} slots");
                 
-                // Восстанавливаем инвентарь клиента из сохранения хоста
-                SRMP.Log($"← Receiving inventory from host: {save.localPlayerSave.ammo.Count} slots");
-                
-                foreach (var slot in save.localPlayerSave.ammo)
+                // ВАЖНО: Сначала очищаем все слоты клиента
+                for (int clearIdx = 0; clearIdx < ammo.Slots.Count; clearIdx++)
                 {
-                    if (slot.count > 0)
+                    ammo.Slots[clearIdx].Clear();
+                }
+                SRMP.Debug($"✓ Cleared {ammo.Slots.Count} inventory slots");
+                
+                // Восстанавливаем инвентарь из сохранения
+                int itemsRestored = 0;
+                for (int i = 0; i < save.localPlayerSave.ammo.Count; i++)
+                {
+                    var slot = save.localPlayerSave.ammo[i];
+                    
+                    // Логируем каждый слот для отладки
+                    SRMP.Debug($"  Slot {i}: ID={slot.id}, count={slot.count}");
+                    
+                    if (slot.count > 0 && slot.id != -1 && slot.id != 9) // Проверяем что слот не пустой
                     {
-                        ammo.MaybeAddToSpecificSlot(identifiableTypes[slot.id], null, i, slot.count, true);
-                        itemsRestored++;
-                        SRMP.Debug($"  Slot {i}: {identifiableTypes[slot.id]?.name ?? "null"} x{slot.count}");
+                        if (identifiableTypes.ContainsKey(slot.id))
+                        {
+                            var identType = identifiableTypes[slot.id];
+                            ammo.MaybeAddToSpecificSlot(identType, null, i, slot.count, true);
+                            itemsRestored++;
+                            SRMP.Log($"  ✓ Slot {i}: {identType.name} x{slot.count}");
+                        }
+                        else
+                        {
+                            SRMP.Log($"  ⚠ Slot {i}: Unknown item ID {slot.id} - skipped");
+                        }
                     }
-                    i++;
                 }
                 
-                SRMP.Log($"✓ Restored client inventory from host: {itemsRestored} items");
+                SRMP.Log($"✓ Restored {itemsRestored} items from {save.localPlayerSave.ammo.Count} slots");
+                SRMP.Log($"📍 Position: Loaded from host's save");
+                SRMP.Log($"💾 All client data stored on HOST (not locally)");
+                SRMP.Log($"===================================================");
             }
             catch (Exception ex)
             {
@@ -794,9 +842,16 @@ public class Main : SR2EExpansionV1
                     case Il2Cpp.LandPlot.Id.CORRAL:
                         var feeder = model.gameObj.GetComponentInChildren<SlimeFeeder>();
                         
-                        handlingPacket = true;
-                        feeder.SetFeederSpeed(plot.feederSpeed);
-                        handlingPacket = false;
+                        if (feeder != null)
+                        {
+                            handlingPacket = true;
+                            feeder.SetFeederSpeed(plot.feederSpeed);
+                            handlingPacket = false;
+                        }
+                        else
+                        {
+                            SRMP.Debug($"SlimeFeeder not found for corral plot {plot.id}");
+                        }
                         break;
                 }
 
@@ -839,11 +894,18 @@ public class Main : SR2EExpansionV1
                     SRMP.Log("========== EXITING TO MAIN MENU ==========");
                     SRMP.Log("Server/client active - shutting down...");
                     
-                    // Сохраняем данные перед отключением
-                    if (ServerActive())
+                    // Сохраняем данные перед отключением (ПЕРЕД Shutdown и EraseValues)
+                    if (ServerActive() && !string.IsNullOrEmpty(savedGamePath))
                     {
-                        MultiplayerManager.DoNetworkSave();
-                        SRMP.Log("✓ Server data saved");
+                        try
+                        {
+                            MultiplayerManager.DoNetworkSave();
+                            SRMP.Log("✓ Server data saved");
+                        }
+                        catch (Exception ex)
+                        {
+                            SRMP.Error($"Failed to save on exit: {ex.Message}");
+                        }
                     }
                     
                     // Отключаем сеть

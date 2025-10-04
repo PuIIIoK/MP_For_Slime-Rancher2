@@ -1,4 +1,5 @@
 ﻿using Il2CppMonomiPark.SlimeRancher.Weather;
+using HarmonyLib;
 
 namespace NewSR2MP.Patches
 {
@@ -10,15 +11,19 @@ namespace NewSR2MP.Patches
     [HarmonyPatch(typeof(WeatherDirector), nameof(WeatherDirector.FixedUpdate))]
     public class WeatherDirectorFixedUpdate
     {
-        public static bool Prefix()
+        public static void Postfix(WeatherDirector __instance)
         {
-            // Клиент НЕ обновляет погоду автоматически
-            if (ClientActive())
-                return false;
-            
-            return true;
+            // Инициализируем weatherDirectorInstance при первом вызове
+            if (weatherDirectorInstance == null)
+            {
+                weatherDirectorInstance = __instance;
+                SRMP.Log($"✓ WeatherDirector initialized for weather sync");
+            }
         }
     }
+    
+    // НЕ блокируем FixedUpdate полностью - он обновляет визуальные эффекты!
+    // Вместо этого блокируем только изменение состояний (RunState/StopState)
     
     // Блокируем запуск состояний погоды на клиенте (кроме случаев от хоста)
     [HarmonyPatch(typeof(WeatherDirector), nameof(WeatherDirector.RunState))]

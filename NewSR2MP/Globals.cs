@@ -926,18 +926,6 @@ namespace NewSR2MP
 
         public static List<long> multiplayerSpawnedActorsIDs = new List<long>();
 
-        public static AmmoSlotManager CreateNewPlayerAmmo()
-        {
-            // Create a new AmmoSlotManager with the same definitions as the player
-            var definitions = sceneContext.PlayerState._ammoSlotDefinitions;
-            var newAmmo = new AmmoSlotManager(definitions);
-            
-            // The AmmoSlotManager constructor should automatically create internal structures
-            // We'll need to initialize it with a model after it's registered
-            
-            return newAmmo;
-        }
-
         /// <summary>
         /// The instance of the currently loaded weather director.
         /// </summary>
@@ -1017,8 +1005,12 @@ namespace NewSR2MP
                             dir.RunState(f1.state.Cast<IWeatherState>(), new WeatherModel.ZoneWeatherParameters());
                             if (ClientActive())
                             {
-                                SRMP.Debug($"    ✓ Applied weather state: {f1.state.name}");
+                                SRMP.Log($"    ✓ Applied weather state: {f1.state.name} to current zone {zoneDef?.name}");
                             }
+                        }
+                        else if (ClientActive())
+                        {
+                            SRMP.Debug($"    Zone {zoneDef?.name} not current (player in {dir.Zone?.name}), skipped visual");
                         }
                     });
 

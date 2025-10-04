@@ -158,7 +158,23 @@ namespace NewSR2MP
             // Save client's data before disconnecting
             SaveClientDataOnDisconnect(player);
             
-            DoNetworkSave();
+            // Сохраняем весь мир в файл (без попытки обработать отключившегося игрока)
+            try
+            {
+                FileStream fs = File.Open(savedGamePath, FileMode.Create);
+                BinaryWriter bw = new BinaryWriter(fs);
+                
+                savedGame.WriteData(bw);
+                
+                bw.Dispose();
+                fs.Dispose();
+                
+                SRMP.Debug("World data saved after client disconnect");
+            }
+            catch (Exception saveEx)
+            {
+                SRMP.Error($"Failed to save world data: {saveEx.Message}");
+            }
             
             try
             {
@@ -215,91 +231,30 @@ namespace NewSR2MP
                     return;
                 }
                 
-                // Find the client's ammo by their player pointer
-                string playerPointer = $"player_{clientGuid}";
-                IntPtr clientAmmoPointer = IntPtr.Zero;
+                // ===== УПРОЩЕННАЯ СИСТЕМА БЕЗ ВИРТУАЛЬНОГО AmmoSlotManager =====
+                // Инвентарь клиента УЖЕ СОХРАНЕН в playerData.ammo
+                // Он обновляется через ClientInventorySyncPacket когда клиент выходит нормально
+                // При аварийном выходе используется последнее сохраненное состояние
                 
-                SRMP.Debug($"Looking for virtual inventory: {playerPointer}");
-                
-                bool foundInventory = false;
                 bool inventorySaved = false;
-                
-                foreach (var ammoEntry in ammoByPlotID.ToList()) // ToList() to avoid modification during iteration
+                if (playerData.ammo != null && playerData.ammo.Count > 0)
                 {
-                    if (ammoPointersToPlotIDs.TryGetValue(ammoEntry.Value.Pointer, out var plotId) &&
-                        plotId == playerPointer)
-                    {
-                        foundInventory = true;
-                        
-                        // Сохраняем виртуальный инвентарь клиента с хоста
-                        var clientAmmo = ammoEntry.Value;
-                        clientAmmoPointer = clientAmmo.Pointer;
-                        
-                        SRMP.Debug($"Found virtual inventory at pointer: {clientAmmoPointer.ToString("X")}");
-                        
-                        try
-                        {
-                            // Пытаемся прочитать слоты (может выбросить исключение если объект уничтожен)
-                            if (clientAmmo != null && clientAmmo.Slots != null && clientAmmo.Slots.Count > 0)
-                            {
-                                // Подсчитываем непустые слоты для логирования
-                                int savedItemsCount = 0;
-                                foreach (var slot in clientAmmo.Slots)
-                                {
-                                    if (slot != null && slot._count > 0)
-                                    {
-                                        savedItemsCount++;
-                                        SRMP.Debug($"  Saving slot: {slot._id?.name ?? "null"} x{slot._count}");
-                                    }
-                                }
-                                
-                                playerData.ammo = SlotsToSRMPAmmoData(clientAmmo.Slots.ToArray());
-                                inventorySaved = true;
-                                
-                                SRMP.Log($"✓ Saved inventory from virtual manager: {savedItemsCount} items in {playerData.ammo.Count} slots");
-                            }
-                            else
-                            {
-                                SRMP.Debug("Virtual inventory slots are null or empty - keeping existing saved data");
-                            }
-                        }
-                        catch (Exception slotEx)
-                        {
-                            // Виртуальный инвентарь уже уничтожен - используем существующие данные из playerData
-                            SRMP.Debug($"Virtual inventory is destroyed, keeping existing saved inventory: {slotEx.Message}");
-                            
-                            // Проверяем что в playerData есть инвентарь
-                            if (playerData.ammo != null && playerData.ammo.Count > 0)
-                            {
-                                int existingItems = playerData.ammo.Count(x => x.count > 0);
-                                SRMP.Log($"✓ Using existing saved inventory: {existingItems} items in {playerData.ammo.Count} slots");
-                                inventorySaved = true;
-                            }
-                        }
-                        
-                        // ВАЖНО: Удалить виртуальный инвентарь клиента из системы после сохранения
-                        // Это предотвращает конфликт с инвентарем хоста
-                        ammoByPlotID.Remove(playerPointer);
-                        SRMP.Debug($"✓ Removed virtual inventory from ammoByPlotID");
-                        break;
-                    }
+                    int itemCount = playerData.ammo.Count(x => x.count > 0);
+                    SRMP.Log($"✓ Client inventory: {itemCount} items in {playerData.ammo.Count} slots");
+                    SRMP.Log($"  (Updated from ClientInventorySyncPacket or last saved state)");
+                    inventorySaved = true;
                 }
-                
-                if (!foundInventory)
+                else
                 {
-                    SRMP.Debug($"Virtual inventory not found for {playerPointer}");
-                    
-                    // Используем существующие данные из playerData
-                    if (playerData.ammo != null && playerData.ammo.Count > 0)
-                    {
-                        int existingItems = playerData.ammo.Count(x => x.count > 0);
-                        SRMP.Log($"✓ Using existing saved inventory: {existingItems} items in {playerData.ammo.Count} slots");
-                        inventorySaved = true;
-                    }
+                    SRMP.Log($"⚠ Client inventory is empty or null!");
                 }
                 
                 // Mark tutorials as completed (client has seen the world)
                 playerData.tutorialsCompleted = true;
+                
+                // Mark intro as seen (client will skip it on next join)
+                // Note: hasSeenIntro is set to true in RestoreClientInventory when client first joins
+                // We just keep it here to ensure it's saved to file
                 
                 // Save waypoint if exists
                 if (MultiplayerWaypointManager.Instance != null)
@@ -328,32 +283,12 @@ namespace NewSR2MP
                 
                 if (!inventorySaved)
                 {
-                    SRMP.Log($"⚠ Inventory data not updated (using previous save state)");
-                }
-                
-                // Удалить pointer клиента из lookup таблицы
-                if (clientAmmoPointer != IntPtr.Zero && ammoPointersToPlotIDs.ContainsKey(clientAmmoPointer))
-                {
-                    ammoPointersToPlotIDs.Remove(clientAmmoPointer);
-                    SRMP.Debug($"✓ Removed pointer from lookup table");
-                }
-                
-                // Проверяем что инвентарь клиента полностью очищен из системы
-                int remainingCount = ammoByPlotID.Count(x => x.Key.StartsWith($"player_{clientGuid}"));
-                if (remainingCount > 0)
-                {
-                    SRMP.Log($"⚠ Found {remainingCount} remaining virtual inventories for this client! Cleaning up...");
-                    foreach (var key in ammoByPlotID.Keys.ToList())
-                    {
-                        if (key.StartsWith($"player_{clientGuid}"))
-                        {
-                            ammoByPlotID.Remove(key);
-                            SRMP.Debug($"  Removed: {key}");
-                        }
-                    }
+                    SRMP.Log($"⚠ Inventory data not saved (will use previous save state on reconnect)");
                 }
                 
                 SRMP.Log($"✓ Client data saved successfully");
+                SRMP.Log($"📁 Save location: HOST's computer (not client)");
+                SRMP.Log($"📂 File: {savedGamePath}");
                 SRMP.Log($"========================================");
             }
             catch (Exception ex)
@@ -457,38 +392,68 @@ namespace NewSR2MP
         /// </summary>
         public static void EraseValues()
         {
-            foreach (var gadget in gadgets.Values)
+            try
             {
-                if (gadget.TryGetGameObject(out var gadgetObject))
-                    DestroyGadget(gadgetObject, "SRMP.EraseValuesGadget");
+                SRMP.Debug("Erasing multiplayer values...");
+                
+                foreach (var gadget in gadgets.Values)
+                {
+                    if (gadget != null && gadget.TryGetGameObject(out var gadgetObject))
+                        DestroyGadget(gadgetObject, "SRMP.EraseValuesGadget");
+                }
+                foreach (var actor in actors.Values)
+                {
+                    if (actor != null && actor.TryGetGameObject(out var actorObject))
+                        DestroyActor(actorObject, "SRMP.EraseValuesActor");
+                }
+                actors.Clear();
+                gadgets.Clear();
+
+                foreach (var player in players)
+                {
+                    // Проверяем что worldObject не null перед уничтожением
+                    // (при смене сцены через портал объекты могут быть уже уничтожены)
+                    if (player.worldObject != null)
+                    {
+                        try
+                        {
+                            Destroy(player.worldObject.gameObject);
+                        }
+                        catch (Exception ex)
+                        {
+                            SRMP.Debug($"Failed to destroy player object: {ex.Message}");
+                        }
+                    }
+                }
+                players.Clear();
+                playerUsernames.Clear();
+                playerUsernamesReverse.Clear();
+
+                clientToGuid.Clear();
+
+                ammoByPlotID.Clear();
+
+                savedGame = new NetworkV01();
+                savedGamePath = String.Empty;
+                
+                SRMP.Debug("✓ Multiplayer values erased");
             }
-            foreach (var actor in actors.Values)
+            catch (Exception ex)
             {
-                if (actor.TryGetGameObject(out var actorObject))
-                    DestroyActor(actorObject, "SRMP.EraseValuesActor");
+                SRMP.Error($"Error in EraseValues: {ex.Message}");
             }
-            actors.Clear();
-            gadgets.Clear();
-
-            foreach (var player in players)
-            {
-                Destroy(player.worldObject.gameObject);
-            }
-            players.Clear();
-            playerUsernames.Clear();
-            playerUsernamesReverse.Clear();
-
-            clientToGuid.Clear();
-
-            ammoByPlotID.Clear();
-
-            savedGame = new NetworkV01();
-            savedGamePath = String.Empty;
         }
 
 
         public static void DoNetworkSave()
         {
+            // Проверяем что путь не пустой перед сохранением
+            if (string.IsNullOrEmpty(savedGamePath))
+            {
+                SRMP.Debug("Cannot save - savedGamePath is empty");
+                return;
+            }
+
             foreach (var player in players)
             {
                 if (player.playerID == ushort.MaxValue)
@@ -499,10 +464,27 @@ namespace NewSR2MP
                 {
                     var ammo = GetNetworkAmmo($"player_{playerID}");
                     
-                    if (player.worldObject && savedGame.savedPlayers.TryGetPlayer(playerID, out var playerFromID) )
+                    if (player.worldObject && savedGame.savedPlayers.TryGetPlayer(playerID, out var playerFromID))
                     {
-                        List<NetworkAmmoDataV01> ammoData = SlotsToSRMPAmmoData(ammo.Slots);
-                        playerFromID.ammo = ammoData;
+                        // Проверяем что виртуальный инвентарь существует
+                        if (ammo != null && ammo.Slots != null && ammo.Slots.Count > 0)
+                        {
+                            try
+                            {
+                                List<NetworkAmmoDataV01> ammoData = SlotsToSRMPAmmoData(ammo.Slots);
+                                playerFromID.ammo = ammoData;
+                                SRMP.Debug($"Saved inventory for player {player.playerID}: {ammoData.Count} slots");
+                            }
+                            catch (Exception ex)
+                            {
+                                SRMP.Debug($"Failed to save inventory for player {player.playerID}: {ex.Message}");
+                                // Используем существующие данные из playerFromID.ammo
+                            }
+                        }
+                        else
+                        {
+                            SRMP.Debug($"Virtual inventory not found for player {player.playerID} - keeping existing data");
+                        }
                         
                         playerFromID.position = new ModdedVector3V01(player.worldObject.transform.position);
                         playerFromID.rotation = new ModdedVector3V01(player.worldObject.transform.eulerAngles);
@@ -514,13 +496,20 @@ namespace NewSR2MP
                 }
             }
 
-            FileStream fs = File.Open(savedGamePath, FileMode.Create);
-            BinaryWriter bw = new BinaryWriter(fs);
-            
-            savedGame.WriteData(bw);
-            
-            bw.Dispose();
-            fs.Dispose();
+            try
+            {
+                FileStream fs = File.Open(savedGamePath, FileMode.Create);
+                BinaryWriter bw = new BinaryWriter(fs);
+                
+                savedGame.WriteData(bw);
+                
+                bw.Dispose();
+                fs.Dispose();
+            }
+            catch (Exception ex)
+            {
+                SRMP.Error($"Failed to save game: {ex.Message}");
+            }
         }
     }
 }

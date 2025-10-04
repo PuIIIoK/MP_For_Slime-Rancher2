@@ -1,4 +1,5 @@
-﻿using Il2CppMonomiPark.SlimeRancher.World;
+﻿using System;
+using Il2CppMonomiPark.SlimeRancher.World;
 using UnityEngine;
 
 namespace NewSR2MP.Patches
@@ -29,11 +30,24 @@ namespace NewSR2MP.Patches
 
             if ((ServerActive() || ClientActive()) && !handlingPacket && actorObj)
             {
-                var packet = new ActorDestroyGlobalPacket()
+                // Проверяем что у объекта есть IdentifiableActor компонент
+                var identActor = actorObj.GetComponent<IdentifiableActor>();
+                if (identActor != null)
                 {
-                    id = actorObj.GetComponent<IdentifiableActor>().GetActorId().Value,
-                };
-                MultiplayerManager.NetworkSend(packet);
+                    try
+                    {
+                        var packet = new ActorDestroyGlobalPacket()
+                        {
+                            id = identActor.GetActorId().Value,
+                        };
+                        MultiplayerManager.NetworkSend(packet);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Игнорируем ошибки при отправке (например NoConnection при отключении)
+                        SRMP.Debug($"Failed to send ActorDestroy packet: {ex.Message}");
+                    }
+                }
             }
             return true;
         }
@@ -47,12 +61,25 @@ namespace NewSR2MP.Patches
             
             if ((ServerActive() || ClientActive()) && !handlingPacket && gadgetObj) 
             {
-                SRMP.Debug("Destroyed Gadget!");
-                var packet = new ActorDestroyGlobalPacket()
+                // Проверяем что у объекта есть Gadget компонент
+                var gadget = gadgetObj.GetComponent<Gadget>();
+                if (gadget != null)
                 {
-                    id = gadgetObj.GetComponent<Gadget>().GetActorId().Value,
-                };
-                MultiplayerManager.NetworkSend(packet);
+                    try
+                    {
+                        SRMP.Debug("Destroyed Gadget!");
+                        var packet = new ActorDestroyGlobalPacket()
+                        {
+                            id = gadget.GetActorId().Value,
+                        };
+                        MultiplayerManager.NetworkSend(packet);
+                    }
+                    catch (Exception ex)
+                    {
+                        // Игнорируем ошибки при отправке (например NoConnection при отключении)
+                        SRMP.Debug($"Failed to send GadgetDestroy packet: {ex.Message}");
+                    }
+                }
             }
         }
     }

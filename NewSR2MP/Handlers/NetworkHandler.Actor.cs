@@ -69,7 +69,13 @@ public partial class NetworkHandler
                 }
 
                 obj.GetComponent<NetworkActor>().IsOwned = false;
-                obj.GetComponent<TransformSmoother>().nextPos = packet.position;
+                obj.GetComponent<TransformSmoother>().SetNetworkTarget(packet.position, packet.rotation, packet.velocity);
+
+                // Мгновенно применяем velocity для плавного движения брошенных объектов
+                if (packet.velocity.sqrMagnitude > 0.01f && obj.TryGetComponent<Rigidbody>(out var rb))
+                {
+                    rb.velocity = packet.velocity;
+                }
 
                 obj.GetComponent<NetworkActorOwnerToggle>().savedVelocity = packet.velocity;
             }
@@ -112,8 +118,14 @@ public partial class NetworkHandler
             {
                 obj.AddComponent<NetworkResource>();
                 obj.GetComponent<TransformSmoother>().enabled = false;
+                
+                // Мгновенно применяем velocity для плавного броска
                 if (obj.TryGetComponent<Rigidbody>(out var rb))
+                {
                     rb.velocity = packet.velocity;
+                    SRMP.Debug($"Client received thrown actor with velocity {packet.velocity.magnitude:F2} m/s");
+                }
+                
                 obj.GetComponent<TransformSmoother>().interpolPeriod = ActorTimer;
                 obj.GetComponent<Vacuumable>().Launch(Vacuumable.LaunchSource.PLAYER);
             }
@@ -140,12 +152,17 @@ public partial class NetworkHandler
             else if (obj.TryGetComponent<Gadget>(out var gadget))
                 actorID = gadget._model.actorId.Value;
             
+            // Отправляем ActorSetOwnerPacket клиенту который бросил
+            // Это дает ему владение актером
             var ownPacket = new ActorSetOwnerPacket()
             {
                 id = actorID,
                 velocity = packet.velocity
             };
             MultiplayerManager.NetworkSend(ownPacket, MultiplayerManager.ServerSendOptions.SendToPlayer(netPlayer.playerID));
+            
+            // Отправляем ActorSpawnPacket ВСЕМ игрокам (включая того кто бросил)
+            // Его локальный актер был уничтожен, нужно пересоздать с правильным ID
             MultiplayerManager.NetworkSend(forwardPacket);
             
             obj.GetComponent<NetworkActorOwnerToggle>().savedVelocity = packet.velocity;
@@ -168,7 +185,7 @@ public partial class NetworkHandler
 
             actor.IsOwned = false;
             actor.GetComponent<TransformSmoother>().enabled = true;
-            actor.GetComponent<TransformSmoother>().nextPos = actor.transform.position;
+            actor.GetComponent<TransformSmoother>().SetNetworkTarget(actor.transform.position, actor.transform.eulerAngles, Vector3.zero);
             actor.enabled = false;
 
             actor.GetComponent<NetworkActorOwnerToggle>().LoseGrip();
@@ -261,8 +278,9 @@ public partial class NetworkHandler
         {
             if (!actors.TryGetValue(packet.id, out var actor)) return;
             var t = actor.GetComponent<TransformSmoother>();
-            t.nextPos = packet.position;
-            t.nextRot = packet.rotation;
+            
+            // Используем новый метод для установки целевой позиции с экстраполяцией
+            t.SetNetworkTarget(packet.position, packet.rotation, packet.velocity);
 
             if (actor.TryGetComponent<SlimeEmotions>(out var emotions))
                 emotions.SetFromNetwork(packet.slimeEmotions);

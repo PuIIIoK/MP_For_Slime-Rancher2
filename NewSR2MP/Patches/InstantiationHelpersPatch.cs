@@ -31,7 +31,7 @@ namespace NewSR2MP.Patches
                     var isGadget = __result.TryGetComponent<Gadget>(out var gadget);
                     if (isGadget) ident = gadget;
 
-                    // Launch immediately for client - no delay
+                    // Launch immediately for client - предмет сразу летит!
                     if (__result.TryGetComponent<Vacuumable>(out var vac))
                         vac.Launch(Vacuumable.LaunchSource.PLAYER);
 
@@ -42,7 +42,7 @@ namespace NewSR2MP.Patches
                     var packet = new ActorSpawnClientPacket()
                     {
                         ident = GetIdentID(ident.identType),
-                        position = position,
+                        position = __result.transform.position, // Используем актуальную позицию после Launch
                         rotation = rotation.eulerAngles,
                         velocity = vel,
                         player = currentPlayerID,
@@ -51,6 +51,9 @@ namespace NewSR2MP.Patches
 
                     MultiplayerManager.NetworkSend(packet);
 
+                    SRMP.Debug($"Client threw {ident.identType.name} with velocity {vel.magnitude:F2} m/s from {__result.transform.position}");
+                    
+                    // Уничтожаем локальный актер - хост пришлет его обратно
                     DestroyActor(__result, "SR2MP.ClientActorSpawn", true);
                 }
             }
