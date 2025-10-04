@@ -833,6 +833,29 @@ public class Main : SR2EExpansionV1
                 Initialize();
                 break;
             case "MainMenuEnvironment":
+                // Автоматически отключаем сервер/клиент при выходе в главное меню
+                if (ServerActive() || ClientActive())
+                {
+                    SRMP.Log("========== EXITING TO MAIN MENU ==========");
+                    SRMP.Log("Server/client active - shutting down...");
+                    
+                    // Сохраняем данные перед отключением
+                    if (ServerActive())
+                    {
+                        MultiplayerManager.DoNetworkSave();
+                        SRMP.Log("✓ Server data saved");
+                    }
+                    
+                    // Отключаем сеть
+                    MultiplayerManager.Shutdown();
+                    
+                    // Очищаем состояние
+                    MultiplayerManager.EraseValues();
+                    
+                    SRMP.Log("✓ Network shutdown complete");
+                    SRMP.Log("==========================================");
+                }
+                
                 SRMP.Log("Creator PinkTarr");
                 SRMP.Log(SR2ELanguageManger.translation("ui.discord.intro"));
                 SRMP.Log(SR2ELanguageManger.translation("ui.discord.invite") + " https://discord.gg/JKykgrsvhY", 175);

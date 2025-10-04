@@ -6,6 +6,8 @@ using Il2CppMonomiPark.SlimeRancher.UI.Map;
 using Il2CppMonomiPark.SlimeRancher.World;
 using Il2CppMonomiPark.World;
 using NewSR2MP.Attributes;
+using NewSR2MP.Packet;
+using NewSR2MP.SaveModels;
 
 namespace NewSR2MP;
 
@@ -215,6 +217,108 @@ public partial class NetworkHandler
                 gameObj = null,
                 spawnQueue = new Il2CppSystem.Collections.Generic.Queue<IdentifiableType>()
             });
+        }
+    }
+    
+    [PacketResponse]
+    private static void HandleClientInventorySync(NetPlayerState netPlayer, ClientInventorySyncPacket packet, byte channel)
+    {
+        // Только хост обрабатывает этот пакет
+        if (!ServerActive())
+            return;
+        
+        try
+        {
+            SRMP.Log($"========== CLIENT INVENTORY SYNC ==========");
+            SRMP.Log($"Connection ID: {netPlayer.playerID}");
+            
+            // Получаем GUID клиента
+            if (!clientToGuid.TryGetValue(netPlayer.playerID, out var clientGuid))
+            {
+                SRMP.Log($"⚠ Cannot find GUID for connection {netPlayer.playerID}");
+                return;
+            }
+            
+            SRMP.Log($"Client GUID: {clientGuid}");
+            
+            // Получаем данные игрока из сохранения
+            if (!savedGame.savedPlayers.TryGetPlayer(clientGuid, out var playerData))
+            {
+                SRMP.Log($"⚠ Cannot find player data for GUID {clientGuid}");
+                return;
+            }
+            
+            // Находим виртуальный инвентарь клиента
+            string playerPointer = $"player_{clientGuid}";
+            
+            if (ammoByPlotID.TryGetValue(playerPointer, out var clientAmmo))
+            {
+                // Обновляем виртуальный инвентарь актуальными данными от клиента
+                try
+                {
+                    int updatedSlots = 0;
+                    foreach (var slotData in packet.inventory)
+                    {
+                        if (slotData.slot >= 0 && slotData.slot < clientAmmo.Slots.Count)
+                        {
+                            var slot = clientAmmo.Slots[slotData.slot];
+                            
+                            if (slotData.id == -1 || slotData.id == 9) // Пустой слот
+                            {
+                                slot._id = null;
+                                slot._count = 0;
+                            }
+                            else if (identifiableTypes.ContainsKey(slotData.id))
+                            {
+                                slot._id = identifiableTypes[slotData.id];
+                                slot._count = slotData.count;
+                                updatedSlots++;
+                                
+                                SRMP.Debug($"  Updated slot {slotData.slot}: {slot._id?.name ?? "null"} x{slot._count}");
+                            }
+                        }
+                    }
+                    
+                    SRMP.Log($"✓ Updated virtual inventory: {updatedSlots} slots with items");
+                }
+                catch (Exception ex)
+                {
+                    SRMP.Error($"Failed to update virtual inventory: {ex.Message}");
+                }
+            }
+            else
+            {
+                SRMP.Debug($"Virtual inventory not found - saving directly to playerData");
+            }
+            
+            // Сохраняем инвентарь в playerData
+            var networkAmmoData = new List<NetworkAmmoDataV01>();
+            int itemCount = 0;
+            
+            foreach (var slotData in packet.inventory)
+            {
+                networkAmmoData.Add(new NetworkAmmoDataV01
+                {
+                    ident = slotData.id,
+                    count = slotData.count,
+                    emotionX = 0,
+                    emotionY = 0,
+                    emotionZ = 0,
+                    emotionW = 0,
+                });
+                
+                if (slotData.count > 0)
+                    itemCount++;
+            }
+            
+            playerData.ammo = networkAmmoData;
+            
+            SRMP.Log($"✓ Saved client inventory: {itemCount} items in {networkAmmoData.Count} slots");
+            SRMP.Log($"===========================================");
+        }
+        catch (Exception ex)
+        {
+            SRMP.Error($"Failed to handle client inventory sync: {ex}");
         }
     }
 }

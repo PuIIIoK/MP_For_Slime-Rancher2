@@ -165,14 +165,27 @@ namespace NewSR2MP
                 if (!TryGetPlayer(player, out var state))
                     return;
                 
-                Destroy(state.worldObject);
+                // УДАЛЯЕМ МОДЕЛЬКУ ИГРОКА КЛИЕНТА
+                if (state.worldObject != null)
+                {
+                    var playerGameObject = state.worldObject.gameObject;
+                    if (playerGameObject != null)
+                    {
+                        SRMP.Log($"✓ Deleting client player model: Player{state.playerID}");
+                        Destroy(playerGameObject);
+                    }
+                }
+                
                 players.Remove(state);
                 playerUsernames.Remove(playerUsernamesReverse[state.playerID]);
                 playerUsernamesReverse.Remove(player);
                 players.Remove(state);
                 clientToGuid.Remove(player);
             }
-            catch { }
+            catch (Exception ex)
+            {
+                SRMP.Error($"Error in OnServerDisconnect: {ex}");
+            }
 
         }
         
@@ -183,80 +196,165 @@ namespace NewSR2MP
         {
             try
             {
+                SRMP.Log($"========== SAVING CLIENT DATA ==========");
+                SRMP.Log($"Connection ID: {player}");
+                
                 // Get the client's GUID
                 if (!clientToGuid.TryGetValue(player, out var clientGuid))
+                {
+                    SRMP.Log($"⚠ Cannot find GUID for connection {player} - data not saved!");
                     return;
+                }
+                
+                SRMP.Log($"Client GUID: {clientGuid}");
                 
                 // Get the player data from saved game
                 if (!savedGame.savedPlayers.TryGetPlayer(clientGuid, out var playerData))
+                {
+                    SRMP.Log($"⚠ Cannot find player data for GUID {clientGuid} - data not saved!");
                     return;
+                }
                 
                 // Find the client's ammo by their player pointer
                 string playerPointer = $"player_{clientGuid}";
                 IntPtr clientAmmoPointer = IntPtr.Zero;
+                
+                SRMP.Debug($"Looking for virtual inventory: {playerPointer}");
+                
+                bool foundInventory = false;
+                bool inventorySaved = false;
                 
                 foreach (var ammoEntry in ammoByPlotID.ToList()) // ToList() to avoid modification during iteration
                 {
                     if (ammoPointersToPlotIDs.TryGetValue(ammoEntry.Value.Pointer, out var plotId) &&
                         plotId == playerPointer)
                     {
+                        foundInventory = true;
+                        
                         // Сохраняем виртуальный инвентарь клиента с хоста
                         var clientAmmo = ammoEntry.Value;
                         clientAmmoPointer = clientAmmo.Pointer;
                         
-                        // Подсчитываем непустые слоты для логирования
-                        int savedItemsCount = 0;
-                        foreach (var slot in clientAmmo.Slots)
+                        SRMP.Debug($"Found virtual inventory at pointer: {clientAmmoPointer.ToString("X")}");
+                        
+                        try
                         {
-                            if (slot != null && slot._count > 0)
-                                savedItemsCount++;
-                        }
-                        
-                        playerData.ammo = SlotsToSRMPAmmoData(clientAmmo.Slots.ToArray());
-                        
-                        // Mark tutorials as completed (client has seen the world)
-                        playerData.tutorialsCompleted = true;
-                        
-                        // Save waypoint if exists
-                        if (MultiplayerWaypointManager.Instance != null)
-                        {
-                            var waypoint = MultiplayerWaypointManager.Instance.GetWaypoint(player);
-                            if (waypoint != null && waypoint.isActive)
+                            // Пытаемся прочитать слоты (может выбросить исключение если объект уничтожен)
+                            if (clientAmmo != null && clientAmmo.Slots != null && clientAmmo.Slots.Count > 0)
                             {
-                                playerData.hasWaypoint = true;
-                                playerData.waypointPosition = new ModdedVector3V01(waypoint.position);
-                                playerData.waypointMap = (byte)waypoint.mapType;
+                                // Подсчитываем непустые слоты для логирования
+                                int savedItemsCount = 0;
+                                foreach (var slot in clientAmmo.Slots)
+                                {
+                                    if (slot != null && slot._count > 0)
+                                    {
+                                        savedItemsCount++;
+                                        SRMP.Debug($"  Saving slot: {slot._id?.name ?? "null"} x{slot._count}");
+                                    }
+                                }
+                                
+                                playerData.ammo = SlotsToSRMPAmmoData(clientAmmo.Slots.ToArray());
+                                inventorySaved = true;
+                                
+                                SRMP.Log($"✓ Saved inventory from virtual manager: {savedItemsCount} items in {playerData.ammo.Count} slots");
                             }
                             else
                             {
-                                playerData.hasWaypoint = false;
+                                SRMP.Debug("Virtual inventory slots are null or empty - keeping existing saved data");
                             }
                         }
-                        
-                        // Save player position
-                        if (TryGetPlayer(player, out var playerState) && playerState.worldObject != null)
+                        catch (Exception slotEx)
                         {
-                            playerData.position = new ModdedVector3V01(playerState.worldObject.transform.position);
-                            playerData.rotation = new ModdedVector3V01(playerState.worldObject.transform.eulerAngles);
+                            // Виртуальный инвентарь уже уничтожен - используем существующие данные из playerData
+                            SRMP.Debug($"Virtual inventory is destroyed, keeping existing saved inventory: {slotEx.Message}");
+                            
+                            // Проверяем что в playerData есть инвентарь
+                            if (playerData.ammo != null && playerData.ammo.Count > 0)
+                            {
+                                int existingItems = playerData.ammo.Count(x => x.count > 0);
+                                SRMP.Log($"✓ Using existing saved inventory: {existingItems} items in {playerData.ammo.Count} slots");
+                                inventorySaved = true;
+                            }
                         }
-                        
-                        SRMP.Log($"✓ Saved client inventory: {savedItemsCount} items in {playerData.ammo.Count} slots");
-                        SRMP.Debug($"Client data saved - tutorials: {playerData.tutorialsCompleted}, waypoint: {playerData.hasWaypoint}");
                         
                         // ВАЖНО: Удалить виртуальный инвентарь клиента из системы после сохранения
                         // Это предотвращает конфликт с инвентарем хоста
                         ammoByPlotID.Remove(playerPointer);
-                        SRMP.Debug($"✓ Cleaned up virtual inventory: {playerPointer}");
+                        SRMP.Debug($"✓ Removed virtual inventory from ammoByPlotID");
                         break;
                     }
+                }
+                
+                if (!foundInventory)
+                {
+                    SRMP.Debug($"Virtual inventory not found for {playerPointer}");
+                    
+                    // Используем существующие данные из playerData
+                    if (playerData.ammo != null && playerData.ammo.Count > 0)
+                    {
+                        int existingItems = playerData.ammo.Count(x => x.count > 0);
+                        SRMP.Log($"✓ Using existing saved inventory: {existingItems} items in {playerData.ammo.Count} slots");
+                        inventorySaved = true;
+                    }
+                }
+                
+                // Mark tutorials as completed (client has seen the world)
+                playerData.tutorialsCompleted = true;
+                
+                // Save waypoint if exists
+                if (MultiplayerWaypointManager.Instance != null)
+                {
+                    var waypoint = MultiplayerWaypointManager.Instance.GetWaypoint(player);
+                    if (waypoint != null && waypoint.isActive)
+                    {
+                        playerData.hasWaypoint = true;
+                        playerData.waypointPosition = new ModdedVector3V01(waypoint.position);
+                        playerData.waypointMap = (byte)waypoint.mapType;
+                        SRMP.Debug($"  Waypoint saved: {waypoint.mapType}");
+                    }
+                    else
+                    {
+                        playerData.hasWaypoint = false;
+                    }
+                }
+                
+                // Save player position
+                if (TryGetPlayer(player, out var playerState) && playerState.worldObject != null)
+                {
+                    playerData.position = new ModdedVector3V01(playerState.worldObject.transform.position);
+                    playerData.rotation = new ModdedVector3V01(playerState.worldObject.transform.eulerAngles);
+                    SRMP.Debug($"  Position saved: {playerState.worldObject.transform.position}");
+                }
+                
+                if (!inventorySaved)
+                {
+                    SRMP.Log($"⚠ Inventory data not updated (using previous save state)");
                 }
                 
                 // Удалить pointer клиента из lookup таблицы
                 if (clientAmmoPointer != IntPtr.Zero && ammoPointersToPlotIDs.ContainsKey(clientAmmoPointer))
                 {
                     ammoPointersToPlotIDs.Remove(clientAmmoPointer);
-                    SRMP.Debug($"Removed client ammo pointer from lookup table");
+                    SRMP.Debug($"✓ Removed pointer from lookup table");
                 }
+                
+                // Проверяем что инвентарь клиента полностью очищен из системы
+                int remainingCount = ammoByPlotID.Count(x => x.Key.StartsWith($"player_{clientGuid}"));
+                if (remainingCount > 0)
+                {
+                    SRMP.Log($"⚠ Found {remainingCount} remaining virtual inventories for this client! Cleaning up...");
+                    foreach (var key in ammoByPlotID.Keys.ToList())
+                    {
+                        if (key.StartsWith($"player_{clientGuid}"))
+                        {
+                            ammoByPlotID.Remove(key);
+                            SRMP.Debug($"  Removed: {key}");
+                        }
+                    }
+                }
+                
+                SRMP.Log($"✓ Client data saved successfully");
+                SRMP.Log($"========================================");
             }
             catch (Exception ex)
             {

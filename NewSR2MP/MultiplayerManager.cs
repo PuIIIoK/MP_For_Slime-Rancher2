@@ -134,13 +134,29 @@ namespace NewSR2MP
         // Hefty code
         public static void PlayerJoin(ushort conn, Guid savingID, string username)
         {
-            SRMP.Debug("A client is attempting to join!");
+            SRMP.Log($"========== CLIENT CONNECTION ==========");
+            SRMP.Log($"Player: {username}");
+            SRMP.Log($"Connection ID: {conn}");
+            SRMP.Log($"GUID: {savingID}");
+            SRMP.Log($"=======================================");
 
-            clientToGuid.Add(conn, savingID);
+            // Сохраняем связь между connection ID и GUID игрока
+            // Это нужно чтобы при отключении найти сохранение игрока
+            if (clientToGuid.ContainsKey(conn))
+            {
+                SRMP.Log($"⚠ Connection {conn} already has a GUID registered! Replacing...");
+                clientToGuid[conn] = savingID;
+            }
+            else
+            {
+                clientToGuid.Add(conn, savingID);
+            }
 
+            // Проверяем существует ли сохранение для этого GUID
             var newPlayer = !savedGame.savedPlayers.TryGetPlayer(savingID, out var playerData);
             if (newPlayer)
             {
+                // НОВЫЙ ИГРОК - создаем пустое сохранение
                 playerData = new NetPlayerV01();
                 
                 // Set spawn position to default spawn for new players
@@ -158,20 +174,24 @@ namespace NewSR2MP
                     });
                 }
                 
-                SRMP.Log($"✓ New player {username} created with empty inventory");
+                SRMP.Log($"✓ NEW PLAYER: {username} (GUID: {savingID.ToString().Substring(0, 8)}...)");
+                SRMP.Log($"  → Created empty inventory (7 slots)");
 
                 savedGame.savedPlayers.playerList.Add(new GuidV01(savingID), playerData);
             }
             else
             {
-                // Existing player - will spawn at their saved position  
+                // ВОЗВРАЩАЮЩИЙСЯ ИГРОК - загружаем его сохранение
                 int existingItems = 0;
+                int totalSlots = playerData.ammo.Count;
                 foreach (var ammoSlot in playerData.ammo)
                 {
                     if (ammoSlot.count > 0)
                         existingItems++;
                 }
-                SRMP.Log($"✓ Returning player {username} - {existingItems} items in inventory");
+                
+                SRMP.Log($"✓ RETURNING PLAYER: {username} (GUID: {savingID.ToString().Substring(0, 8)}...)");
+                SRMP.Log($"  → Loaded saved inventory: {existingItems} items in {totalSlots} slots");
             }
 
             try
@@ -521,6 +541,8 @@ namespace NewSR2MP
 
             try
             {
+                SRMP.Log($"========== VIRTUAL INVENTORY SETUP ==========");
+                
                 // ===== СИСТЕМА ИЗОЛЯЦИИ ИНВЕНТАРЕЙ =====
                 // Создаем ВИРТУАЛЬНЫЙ инвентарь для клиента на хосте
                 // Этот инвентарь ПОЛНОСТЬЮ НЕЗАВИСИМ от инвентаря хоста
@@ -531,11 +553,23 @@ namespace NewSR2MP
                 // ВАЖНО: Клиент использует свой ЛОКАЛЬНЫЙ инвентарь (sceneContext.PlayerState.Ammo)
                 // который НЕ регистрируется в ammoByPlotID и НЕ синхронизируется через пакеты
                 
+                string playerPointer = $"player_{savingID}";
+                
+                // Проверяем не существует ли уже виртуальный инвентарь (защита от дубликатов)
+                if (ammoByPlotID.ContainsKey(playerPointer))
+                {
+                    SRMP.Log($"⚠ Virtual inventory for {username} already exists! Removing old one...");
+                    ammoByPlotID.Remove(playerPointer);
+                }
+                
                 var newAmmo = CreateNewPlayerAmmo();
                 
                 // НЕ используем SetModel от хоста - избегаем фантомных слотов!
                 // Регистрируем виртуальный инвентарь клиента на хосте
-                newAmmo.RegisterAmmoPointer($"player_{savingID}");
+                newAmmo.RegisterAmmoPointer(playerPointer);
+                
+                SRMP.Debug($"  Registered virtual inventory: {playerPointer}");
+                SRMP.Debug($"  Pointer address: {newAmmo.Pointer.ToString("X")}");
 
                 var savedAmmo = playerData.ammo;
                 if (savedAmmo.Count < 7)
@@ -550,11 +584,7 @@ namespace NewSR2MP
                             ident = 9,
                         });
                     }
-                    SRMP.Log($"New player {username} - created empty inventory");
-                }
-                else
-                {
-                    SRMP.Log($"Returning player {username} - loading {savedAmmo.Count} inventory slots");
+                    SRMP.Debug($"  Created empty inventory structure (7 slots)");
                 }
 
                 // Инициализируем виртуальный инвентарь данными из сохранения
@@ -573,7 +603,10 @@ namespace NewSR2MP
                         slot.Appearance = savedSlots[slotC].Appearance;
                         
                         if (slot._count > 0)
+                        {
                             nonEmptySlots++;
+                            SRMP.Debug($"    Slot {slotC}: {slot._id?.name ?? "null"} x{slot._count}");
+                        }
                     }
                     else
                     {
@@ -591,7 +624,8 @@ namespace NewSR2MP
                     slotC++;
                 }
                 
-                SRMP.Log($"Created isolated virtual inventory for client {username}: {nonEmptySlots} non-empty slots");
+                SRMP.Log($"✓ Virtual inventory ready: {nonEmptySlots}/{newAmmo.Slots.Count} slots filled");
+                SRMP.Log($"=============================================");
             }
             catch (Exception ex)
             {
@@ -611,7 +645,61 @@ namespace NewSR2MP
 
         public static void ClientLeave()
         {
+            // Отправляем инвентарь хосту перед выходом
+            if (ClientActive() && !ServerActive())
+            {
+                SendClientInventoryToHost();
+            }
+            
             systemContext.SceneLoader.LoadSceneGroup(systemContext.SceneLoader._mainMenuSceneGroup);
+        }
+        
+        /// <summary>
+        /// Sends client's current inventory to the host before disconnecting
+        /// </summary>
+        private static void SendClientInventoryToHost()
+        {
+            try
+            {
+                if (sceneContext == null || sceneContext.PlayerState == null || sceneContext.PlayerState.Ammo == null)
+                {
+                    SRMP.Debug("Cannot send inventory - scene context not available");
+                    return;
+                }
+                
+                var clientAmmo = sceneContext.PlayerState.Ammo;
+                var inventoryData = new List<AmmoData>();
+                
+                int itemCount = 0;
+                for (int i = 0; i < clientAmmo.Slots.Count; i++)
+                {
+                    var slot = clientAmmo.Slots[i];
+                    int identId = (slot._id == null) ? -1 : GetIdentID(slot._id);
+                    
+                    inventoryData.Add(new AmmoData
+                    {
+                        slot = i,
+                        id = identId,
+                        count = slot._count
+                    });
+                    
+                    if (slot._count > 0)
+                        itemCount++;
+                }
+                
+                var packet = new ClientInventorySyncPacket
+                {
+                    inventory = inventoryData
+                };
+                
+                NetworkSend(packet);
+                
+                SRMP.Log($"→ Sent inventory to host: {itemCount} items in {inventoryData.Count} slots");
+            }
+            catch (Exception ex)
+            {
+                SRMP.Error($"Failed to send inventory to host: {ex}");
+            }
         }
 
         public void Connect(string lobby)
@@ -748,45 +836,44 @@ namespace NewSR2MP
                 SRMP.Error($"Failed in RestoreClientInventory: {ex}");
             }
             
-            // Disable tutorials and intro for clients to prevent black screen
+            // ВАЖНО: Отключаем титры и туториалы для клиента ПРИ КАЖДОМ ЗАХОДЕ
             yield return null;
             
             try
             {
                 if (ClientActive())
                 {
-                    // Disable tutorials completely
+                    // Полное отключение туториалов и титров для клиента (каждый раз)
                     if (sceneContext?.TutorialDirector != null)
                     {
-                        // Cancel current tutorial
+                        // Отменяем текущий туториал если он есть
                         if (sceneContext.TutorialDirector.CurrentTutorial != null)
                         {
                             sceneContext.TutorialDirector.CancelTutorial(sceneContext.TutorialDirector.CurrentTutorial);
                         }
                         
-                        // Hide tutorial popup
+                        // Скрываем окно туториала
                         sceneContext.TutorialDirector.HideTutorialPopup();
                         
-                        // Suppress all tutorials permanently
+                        // Полное подавление всех туториалов
                         var suppressRequester = new Il2CppSystem.Object();
                         sceneContext.TutorialDirector.SuppressTutorials(suppressRequester);
                         
-                        SRMP.Debug("Tutorials disabled for client");
+                        SRMP.Log("✓ Disabled tutorials and intro for client");
                     }
                     
-                    // Mark intro as completed to prevent black screen
+                    // Убираем возможный черный экран и замораживание
                     try
                     {
-                        // Set time scale to normal to ensure game runs properly
+                        // Восстанавливаем нормальную скорость времени
                         Time.timeScale = 1.0f;
                         
-                        // Make sure player is in normal state
+                        // Убеждаемся что игрок может двигаться
                         if (sceneContext?.player != null)
                         {
                             var playerController = sceneContext.player.GetComponent<Il2CppMonomiPark.SlimeRancher.Player.CharacterController.SRCharacterController>();
                             if (playerController != null)
                             {
-                                // Ensure player is not frozen
                                 playerController.enabled = true;
                                 SRMP.Debug("Client player controller enabled");
                             }
@@ -794,7 +881,7 @@ namespace NewSR2MP
                     }
                     catch (Exception stateEx)
                     {
-                        SRMP.Debug($"Player state setup error (non-critical): {stateEx.Message}");
+                        SRMP.Debug($"Player state setup (non-critical): {stateEx.Message}");
                     }
                 }
             }

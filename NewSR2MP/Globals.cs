@@ -211,6 +211,7 @@ namespace NewSR2MP
             PlortCollector,
             AutoFeederMode,
             AutoFeederDispense,
+            ClientInventorySync,
         }
         public static byte[] ExtractResource(String filename)
         {

@@ -46,6 +46,14 @@ namespace NewSR2MP.Patches
     {
         public static void Postfix(AutoSaveDirector __instance, int saveSlotIndex, GameSettingsModel gameSettingsModel)
         {
+            // Для КЛИЕНТА: не создаем мультиплеерный сейв (клиент использует сейв хоста)
+            if (ClientActive())
+            {
+                SRMP.Debug("Client skipping multiplayer save creation - using host's save");
+                return;
+            }
+            
+            // Для ХОСТА: создаем мультиплеерный сейв файл
             MultiplayerManager.CheckForMPSavePath();
             var gameName = __instance.CurrentSaveGameName();
             var path = Path.Combine(__instance._storageProvider.TryCast<FileStorageProvider>().savePath, "MultiplayerSaves", $"{gameName}.srmp");
