@@ -316,8 +316,11 @@ namespace NewSR2MP.EpicSDK
                 return;
             }
 
-            NetworkServer.Shutdown();
-            NetworkServer = null;
+            if (NetworkServer != null)
+            {
+                NetworkServer.Shutdown();
+                NetworkServer = null;
+            }
             UnregisterEvents();
             LobbyId = null;
             IsLobbyOwner = false;

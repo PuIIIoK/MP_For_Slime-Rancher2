@@ -3,4 +3,6 @@
 # This is a mod for Slime Rancher 2 that adds multiplayer.
 
 
-МОД СОЗДАН PINTARR, Я ЯВЛАЮСЬ ЛИШ ФОРКЕРОМ МОДА, И НЕ ИМЕЮ НИКАКОГО ОТНОШЕНИЯ К ДАННОМУ МОДУ, Я ЕГО ПРОСТО ПОРТИРОВАЛ НА БОЛЕЕ НОВУЮ ВЕРСИЮ, А ТАК-ЖЕ ИСПРАВИЛ НЕКОТОРЫЕ БАГИ МОДА ПРЕД СОЗДАТЕЛЯ, И ВНЕС ПАРУ СВОИХ ФИТЧ, ПОЭТОМУ КО МНЕ НИКАКИХ ВОПРОСОВ НЕ ИМЕЕМ.
+This mod was created by PinkTarr.
+
+I PuIIIoK just made a FORK version of the mod, and remade it for the new version of the game, as well as fixed some bugs of the mod. Therefore, all the functionality of the mod is made by PinkTarr

@@ -821,84 +821,12 @@ namespace NewSR2MP
                 SRMP.Error($"Failed in RestoreClientInventory: {ex}");
             }
             
-            // ВАЖНО: Отключаем титры и туториалы для клиента ПРИ КАЖДОМ ЗАХОДЕ
             yield return null;
             
             try
             {
                 if (ClientActive())
                 {
-                    SRMP.Log("========== DISABLING INTRO FOR CLIENT ==========");
-                    SRMP.Log("Reason: Loading host's world with existing progress");
-                    
-                    // ВАЖНО: Клиент ВСЕГДА пропускает интро/туториалы
-                    // Он загружает мир хоста, где это уже пройдено
-                    
-                    // Полное отключение туториалов и титров для клиента
-                    if (sceneContext?.TutorialDirector != null)
-                    {
-                        // Отменяем текущий туториал если он есть
-                        if (sceneContext.TutorialDirector.CurrentTutorial != null)
-                        {
-                            sceneContext.TutorialDirector.CancelTutorial(sceneContext.TutorialDirector.CurrentTutorial);
-                        }
-                        
-                        // Скрываем окно туториала
-                        sceneContext.TutorialDirector.HideTutorialPopup();
-                        
-                        // Полное подавление всех туториалов
-                        var suppressRequester = new Il2CppSystem.Object();
-                        sceneContext.TutorialDirector.SuppressTutorials(suppressRequester);
-                        
-                        SRMP.Log("✓ Tutorials disabled");
-                    }
-                    
-                    // ВСЕГДА пропускаем интро для клиента
-                    try
-                    {
-                        // Ищем и закрываем IntroSequenceUIRoot (новое интро)
-                        var introSequence = UnityEngine.Object.FindObjectOfType<Il2CppMonomiPark.SlimeRancher.UI.IntroSequence.IntroSequenceUIRoot>();
-                        if (introSequence != null && introSequence.gameObject.activeSelf)
-                        {
-                            introSequence.gameObject.SetActive(false);
-                            SRMP.Log("✓ Skipped IntroSequenceUIRoot");
-                        }
-                        
-                        // Ищем и закрываем IntroUI (старое интро)
-                        var introUI = UnityEngine.Object.FindObjectOfType<Il2CppMonomiPark.SlimeRancher.UI.IntroUI>();
-                        if (introUI != null && introUI.gameObject.activeSelf)
-                        {
-                            introUI.gameObject.SetActive(false);
-                            SRMP.Log("✓ Skipped IntroUI");
-                        }
-                        
-                        // Отключаем первое вступление (first time experience)
-                        if (sceneContext?.GameModel != null)
-                        {
-                            // Проверяем есть ли флаг hasCompletedFirstTimeExperience в LoadPacket
-                            bool hostCompletedFTE = latestSaveJoined?.hasCompletedFirstTimeExperience ?? true;
-                            
-                            if (hostCompletedFTE)
-                            {
-                                SRMP.Log("✓ Host has completed first time experience - skipping for client");
-                            }
-                        }
-                        
-                        SRMP.Log("✓ All intro sequences disabled");
-                    }
-                    catch (Exception introEx)
-                    {
-                        SRMP.Debug($"Intro skip (non-critical): {introEx.Message}");
-                    }
-                    
-                    // Помечаем что клиент видел интро (для будущих подключений)
-                    if (latestSaveJoined?.localPlayerSave != null)
-                    {
-                        latestSaveJoined.localPlayerSave.hasSeenIntro = true;
-                    }
-                    
-                    SRMP.Log("===============================================");
-                    
                     // Убираем возможный черный экран и замораживание
                     try
                     {
@@ -924,7 +852,7 @@ namespace NewSR2MP
             }
             catch (Exception ex)
             {
-                SRMP.Error($"Failed to disable client intro/tutorials: {ex}");
+                SRMP.Error($"Failed to setup client state: {ex}");
             }
             
             // Restore waypoint if player had one
